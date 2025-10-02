@@ -84,6 +84,9 @@ pip install -r requirements.txt
 
 # Install in development mode
 pip install -e .
+
+# Verify installation
+make verify
 ```
 
 ## 🛠️ Usage Examples
@@ -139,6 +142,21 @@ print(f"GPU Memory: {memory_info['gpu_available_gb']:.2f}GB available")
 print(f"CPU Memory: {memory_info['cpu_available_gb']:.2f}GB available")
 ```
 
+## 📊 Performance Comparison
+
+Run the benchmark to see how Accelera performs on your system:
+
+```bash
+# Run full benchmark suite
+make benchmark
+
+# Test specific matrix size
+python examples/benchmark.py --custom-size 4000 3000 5000
+
+# Quick demo
+make demo
+```
+
 ## 📁 Project Structure
 
 ```
@@ -150,11 +168,53 @@ accelera/
 │   ├── memory_manager.py      # GPU/CPU memory management
 │   ├── chunking.py            # Chunking strategies
 │   └── config.py              # Configuration and logging
+├── examples/                  # Usage examples
+│   ├── basic_usage.py         # Basic operations demo
+│   ├── advanced_usage.py      # Advanced features demo
+│   └── benchmark.py           # Performance benchmarking
+├── tests/                     # Unit tests
+│   └── test_accelera.py       # Comprehensive test suite
 ├── DOCUMENTATION.md           # Detailed documentation
 ├── requirements.txt           # Python dependencies
 ├── setup.py                   # Package setup
+└── Makefile                   # Development commands
 ```
 
+## 🧪 Running Examples
+
+```bash
+# Basic usage example
+python examples/basic_usage.py
+
+# Advanced features demonstration
+python examples/advanced_usage.py
+
+# Performance benchmarking
+python examples/benchmark.py
+
+# Or use make commands
+make examples
+make benchmark
+```
+
+## 🔧 Development
+
+```bash
+# Install development dependencies
+make dev-install
+
+# Run tests
+make test
+
+# Run linting
+make lint
+
+# Format code
+make format
+
+# Clean build artifacts
+make clean
+```
 
 ## 📖 Documentation
 
@@ -169,6 +229,11 @@ accelera/
 - **📊 Data Processing**: Batch processing of large datasets
 - **🎮 Computer Graphics**: Large transformation matrices
 - **📈 Financial Modeling**: Risk calculations with large covariance matrices
+
+## ⚠️ System Requirements
+
+- **NVIDIA GPU** (optional)
+- **CUDA** (not sure about minimum version)
 
 ## 🤝 Contributing
 
@@ -191,6 +256,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **Community** feedback and contributions
 
 ---
+
+**💡 Pro Tip**: Start with the basic example, then explore advanced features. The framework is designed to be simple by default but powerful when needed!
 
 ```python
 # Get started in 3 lines
