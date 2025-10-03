@@ -1,11 +1,11 @@
 # Makefile for Accelera development
 
-.PHONY: help install bin-install test benchmark examples clean lint docs
+.PHONY: help install install-bin test benchmark examples clean lint docs
 
 help:
 	@echo "Accelera Development Commands:"
 	@echo "  install     - Install package dependencies (pip install)"
-	@echo "  bin-install - Install accelera-python binary wrapper"
+	@echo "  install-bin - Install accelera-python binary wrapper"
 	@echo "  test        - Run unit tests"
 	@echo "  benchmark   - Run performance benchmarks"
 	@echo "  examples    - Run example scripts"
@@ -16,7 +16,7 @@ help:
 install:
 	python3 -m pip install . --break-system-packages
 
-bin-install:
+install-bin:
 	@echo "🚀 Accelera Binary Installation"
 	@echo "==============================="
 	@echo "Installing Accelera transparent PyTorch wrapper..."
