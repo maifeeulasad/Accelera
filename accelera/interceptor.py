@@ -1,0 +1,347 @@
+"""
+PyTorch Interceptor Module
+
+Transparently intercepts PyTorch tensor operations and routes large operations
+through Accelera for automatic memory management.
+"""
+
+import torch
+import torch.nn.functional as F
+import functools
+import logging
+from typing import Optional, Any, Callable
+import os
+
+from .memory_efficient_engine import MemoryEfficientEngine
+from .matrix import Matrix
+
+logger = logging.getLogger(__name__)
+
+
+class AcceleraConfig:
+    """Configuration for PyTorch interception."""
+    
+    def __init__(self):
+        self.enabled = True
+        self.min_size_threshold = int(os.getenv('ACCELERA_MIN_SIZE', '1000'))  # Min dimension to intercept
+        self.memory_threshold_gb = float(os.getenv('ACCELERA_MEMORY_THRESHOLD_GB', '1.0'))  # Min memory to intercept
+        self.engine = None
+        self.verbose = os.getenv('ACCELERA_VERBOSE', 'false').lower() == 'true'
+    
+    def get_engine(self) -> MemoryEfficientEngine:
+        """Get or create the global Accelera memory-efficient engine."""
+        if self.engine is None:
+            # Get fallback strategy from environment (default to CPU)
+            fallback_strategy = os.getenv('ACCELERA_FALLBACK_STRATEGY', 'cpu')
+            
+            # Create memory-efficient engine with configuration from environment/CLI
+            self.engine = MemoryEfficientEngine(
+                enable_progress=False,  # Disable progress for transparent operation
+                memory_threshold_gb=self.memory_threshold_gb,  # Pass the threshold
+                fallback_strategy=fallback_strategy  # Pass fallback strategy
+            )
+        return self.engine
+
+
+# Global configuration
+_config = AcceleraConfig()
+
+
+def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> bool:
+    """
+    Determine if operation should be intercepted by Accelera.
+    
+    Args:
+        tensor_a: First tensor
+        tensor_b: Second tensor (optional)
+        
+    Returns:
+        True if operation should use Accelera
+    """
+    if not _config.enabled:
+        return False
+    
+    # Check if tensors are large enough
+    def is_large_enough(tensor):
+        if tensor is None:
+            return False
+        
+        # Check dimension threshold
+        max_dim = max(tensor.shape) if tensor.shape else 0
+        if max_dim < _config.min_size_threshold:
+            return False
+        
+        # Check memory threshold
+        memory_gb = tensor.numel() * tensor.element_size() / 1e9
+        return memory_gb >= _config.memory_threshold_gb
+    
+    return is_large_enough(tensor_a) or is_large_enough(tensor_b)
+
+
+def log_interception(operation: str, shapes: tuple, use_accelera: bool):
+    """Log operation interception for debugging."""
+    if _config.verbose:
+        status = "ACCELERA" if use_accelera else "PYTORCH"
+        logger.info(f"[{status}] {operation} with shapes {shapes}")
+
+
+def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Accelera-powered matrix multiplication."""
+    if should_intercept(input, other):
+        log_interception("matmul", (input.shape, other.shape), True)
+        
+        engine = _config.get_engine()
+        
+        # Convert to Accelera matrices
+        A = Matrix(input)
+        B = Matrix(other)
+        
+        # Perform operation
+        result = engine.matmul(A, B)
+        
+        # Convert back to tensor on original device
+        result_tensor = result.tensor().to(input.device)
+        
+        if out is not None:
+            out.copy_(result_tensor)
+            return out
+        
+        return result_tensor
+    else:
+        log_interception("matmul", (input.shape, other.shape), False)
+        return torch._original_matmul(input, other, out=out)
+
+
+def accelera_mm(input: torch.Tensor, mat2: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Accelera-powered mm (matrix multiplication)."""
+    if should_intercept(input, mat2):
+        log_interception("mm", (input.shape, mat2.shape), True)
+        return accelera_matmul(input, mat2, out=out)
+    else:
+        log_interception("mm", (input.shape, mat2.shape), False)
+        return torch._original_mm(input, mat2, out=out)
+
+
+def accelera_bmm(input: torch.Tensor, mat2: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Accelera-powered batch matrix multiplication."""
+    if should_intercept(input, mat2):
+        log_interception("bmm", (input.shape, mat2.shape), True)
+        
+        # Handle batch dimension
+        batch_size = input.shape[0]
+        results = []
+        
+        engine = _config.get_engine()
+        
+        for i in range(batch_size):
+            A = Matrix(input[i])
+            B = Matrix(mat2[i])
+            result = engine.matmul(A, B)
+            results.append(result.tensor())
+        
+        result_tensor = torch.stack(results).to(input.device)
+        
+        if out is not None:
+            out.copy_(result_tensor)
+            return out
+        
+        return result_tensor
+    else:
+        log_interception("bmm", (input.shape, mat2.shape), False)
+        return torch._original_bmm(input, mat2, out=out)
+
+
+def accelera_add(input: torch.Tensor, other: torch.Tensor, *, alpha: float = 1, out: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Accelera-powered tensor addition."""
+    if alpha != 1:
+        # Handle alpha scaling with original PyTorch
+        return torch._original_add(input, other, alpha=alpha, out=out)
+    
+    if should_intercept(input, other):
+        log_interception("add", (input.shape, other.shape), True)
+        
+        engine = _config.get_engine()
+        A = Matrix(input)
+        B = Matrix(other)
+        
+        result = engine.add(A, B)
+        result_tensor = result.tensor().to(input.device)
+        
+        if out is not None:
+            out.copy_(result_tensor)
+            return out
+        
+        return result_tensor
+    else:
+        log_interception("add", (input.shape, other.shape), False)
+        return torch._original_add(input, other, alpha=alpha, out=out)
+
+
+def accelera_mul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Accelera-powered element-wise multiplication."""
+    if should_intercept(input, other):
+        log_interception("mul", (input.shape, other.shape), True)
+        
+        engine = _config.get_engine()
+        A = Matrix(input)
+        B = Matrix(other)
+        
+        result = engine.multiply(A, B)
+        result_tensor = result.tensor().to(input.device)
+        
+        if out is not None:
+            out.copy_(result_tensor)
+            return out
+        
+        return result_tensor
+    else:
+        log_interception("mul", (input.shape, other.shape), False)
+        return torch._original_mul(input, other, out=out)
+
+
+def patch_torch():
+    """
+    Patch PyTorch functions to use Accelera for large operations.
+    
+    This is the main function that intercepts PyTorch operations.
+    """
+    if hasattr(torch, '_accelera_patched'):
+        logger.warning("PyTorch already patched with Accelera")
+        return
+    
+    logger.info("Patching PyTorch with Accelera interceptors...")
+    
+    # Store original functions
+    torch._original_matmul = torch.matmul
+    torch._original_mm = torch.mm
+    torch._original_bmm = torch.bmm
+    torch._original_add = torch.add
+    torch._original_mul = torch.mul
+    
+    # Patch with Accelera versions
+    torch.matmul = accelera_matmul
+    torch.mm = accelera_mm
+    torch.bmm = accelera_bmm
+    torch.add = accelera_add
+    torch.mul = accelera_mul
+    
+    # Also patch tensor methods
+    original_tensor_matmul = torch.Tensor.matmul
+    original_tensor_mm = torch.Tensor.mm
+    original_tensor_add = torch.Tensor.add
+    original_tensor_mul = torch.Tensor.mul
+    
+    def tensor_matmul(self, other):
+        return accelera_matmul(self, other)
+    
+    def tensor_mm(self, mat2):
+        return accelera_mm(self, mat2)
+    
+    def tensor_add(self, other, *, alpha=1):
+        return accelera_add(self, other, alpha=alpha)
+    
+    def tensor_mul(self, other):
+        return accelera_mul(self, other)
+    
+    torch.Tensor.matmul = tensor_matmul
+    torch.Tensor.mm = tensor_mm
+    torch.Tensor.add = tensor_add
+    torch.Tensor.mul = tensor_mul
+    
+    # Store original tensor methods for restoration
+    torch.Tensor._original_matmul = original_tensor_matmul
+    torch.Tensor._original_mm = original_tensor_mm
+    torch.Tensor._original_add = original_tensor_add
+    torch.Tensor._original_mul = original_tensor_mul
+    
+    # Mark as patched
+    torch._accelera_patched = True
+    
+    logger.info("✅ PyTorch successfully patched with Accelera!")
+
+
+def unpatch_torch():
+    """
+    Restore original PyTorch functions.
+    """
+    if not hasattr(torch, '_accelera_patched'):
+        logger.warning("PyTorch not patched with Accelera")
+        return
+    
+    logger.info("Restoring original PyTorch functions...")
+    
+    # Restore module functions
+    torch.matmul = torch._original_matmul
+    torch.mm = torch._original_mm
+    torch.bmm = torch._original_bmm
+    torch.add = torch._original_add
+    torch.mul = torch._original_mul
+    
+    # Restore tensor methods
+    torch.Tensor.matmul = torch.Tensor._original_matmul
+    torch.Tensor.mm = torch.Tensor._original_mm
+    torch.Tensor.add = torch.Tensor._original_add
+    torch.Tensor.mul = torch.Tensor._original_mul
+    
+    # Clean up
+    delattr(torch, '_accelera_patched')
+    delattr(torch, '_original_matmul')
+    delattr(torch, '_original_mm')
+    delattr(torch, '_original_bmm')
+    delattr(torch, '_original_add')
+    delattr(torch, '_original_mul')
+    
+    delattr(torch.Tensor, '_original_matmul')
+    delattr(torch.Tensor, '_original_mm')
+    delattr(torch.Tensor, '_original_add')
+    delattr(torch.Tensor, '_original_mul')
+    
+    logger.info("✅ Original PyTorch functions restored!")
+
+
+def configure(enabled: bool = True,
+              min_size_threshold: int = 1000,
+              memory_threshold_gb: float = 1.0,
+              verbose: bool = False):
+    """
+    Configure Accelera interception behavior.
+    
+    Args:
+        enabled: Whether to enable Accelera interception
+        min_size_threshold: Minimum tensor dimension to intercept
+        memory_threshold_gb: Minimum memory usage (GB) to intercept
+        verbose: Whether to log all intercepted operations
+    """
+    global _config
+    _config.enabled = enabled
+    _config.min_size_threshold = min_size_threshold
+    _config.memory_threshold_gb = memory_threshold_gb
+    _config.verbose = verbose
+    
+    if verbose:
+        logger.setLevel(logging.INFO)
+    
+    logger.info(f"Accelera configuration updated: enabled={enabled}, "
+                f"min_size={min_size_threshold}, memory_threshold={memory_threshold_gb}GB")
+
+
+def status():
+    """Get current Accelera interception status."""
+    patched = hasattr(torch, '_accelera_patched')
+    
+    print("🚀 Accelera PyTorch Interception Status")
+    print("=" * 40)
+    print(f"Patched: {'✅ Yes' if patched else '❌ No'}")
+    print(f"Enabled: {'✅ Yes' if _config.enabled else '❌ No'}")
+    print(f"Min size threshold: {_config.min_size_threshold}")
+    print(f"Memory threshold: {_config.memory_threshold_gb} GB")
+    print(f"Verbose logging: {'✅ Yes' if _config.verbose else '❌ No'}")
+    
+    if _config.engine:
+        memory_info = _config.engine.get_memory_info()
+        print(f"GPU utilization: {memory_info['gpu_utilization']:.1f}%")
+
+
+# Auto-patch if requested via environment variable
+if os.getenv('ACCELERA_AUTO_PATCH', 'false').lower() == 'true':
+    patch_torch()
