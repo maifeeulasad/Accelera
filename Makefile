@@ -14,8 +14,7 @@ help:
 	@echo "  docs        - Build documentation"
 
 install:
-	pip install -r requirements.txt
-	pip install -e .
+	python3 -m pip install . --break-system-packages
 
 bin-install:
 	@echo "🚀 Accelera Binary Installation"
