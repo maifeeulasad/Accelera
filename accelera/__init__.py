@@ -9,11 +9,14 @@ from .memory_manager import MemoryManager
 from .chunking import ChunkingStrategy, RowChunking, AdaptiveChunking, TileChunking
 from .matrix import Matrix
 from .engine import MatrixEngine
+from .subprocess_engine import SubprocessMatrixEngine
 from .config import setup_logging, config
+from . import interceptor
 
 __version__ = "0.0.0"
 __all__ = [
     "MatrixEngine", 
+    "SubprocessMatrixEngine",
     "Matrix", 
     "MemoryManager", 
     "ChunkingStrategy", 
@@ -21,7 +24,8 @@ __all__ = [
     "AdaptiveChunking", 
     "TileChunking",
     "setup_logging",
-    "config"
+    "config",
+    "interceptor"
 ]
 
 # Setup default logging
