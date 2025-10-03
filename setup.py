@@ -15,7 +15,7 @@ with open("requirements.txt", "r", encoding="utf-8") as fh:
 
 setup(
     name="accelera",
-    version="0.0.0",
+    version="0.1.0",
     author="Maifee Ul Asad",
     author_email="maifeeulasad@gmail.com",
     description="Memory-efficient matrix operations framework for GPU-constrained environments",
