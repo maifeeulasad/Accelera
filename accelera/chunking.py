@@ -208,6 +208,12 @@ class ChunkIterator:
     def __next__(self) -> torch.Tensor:
         """Get next chunk."""
         if self.current_idx >= len(self.chunks):
+            # Clean up any remaining prefetched chunk
+            if self.prefetched_chunk is not None:
+                if hasattr(self.prefetched_chunk, 'device') and self.prefetched_chunk.device.type == 'cuda':
+                    del self.prefetched_chunk
+                    torch.cuda.empty_cache()
+                self.prefetched_chunk = None
             raise StopIteration
         
         # Get current chunk
@@ -217,10 +223,23 @@ class ChunkIterator:
         else:
             chunk_slice = self.chunks[self.current_idx]
             current_chunk = self.tensor[chunk_slice]
-            current_chunk = self.memory_manager.move_to_gpu(current_chunk)
+            # Move to GPU but track for cleanup
+            try:
+                current_chunk = self.memory_manager.move_to_gpu(current_chunk)
+            except RuntimeError as e:
+                if "out of memory" in str(e).lower():
+                    logger.warning("Could not move chunk to GPU, using CPU")
+                    torch.cuda.empty_cache()
+                    # Keep on CPU
+                else:
+                    raise
         
-        # Prefetch next chunk if enabled
-        if self.prefetch and self.current_idx + 1 < len(self.chunks):
+        # Disable prefetching to reduce memory accumulation 
+        # Only prefetch if we have sufficient memory
+        available_memory = self.memory_manager.get_available_memory()
+        memory_threshold = self.memory_manager.total_gpu_memory * 0.3  # Only prefetch if >30% memory available
+        
+        if self.prefetch and self.current_idx + 1 < len(self.chunks) and available_memory > memory_threshold:
             try:
                 next_slice = self.chunks[self.current_idx + 1]
                 next_chunk = self.tensor[next_slice]
@@ -229,11 +248,25 @@ class ChunkIterator:
                 if "out of memory" in str(e).lower():
                     logger.warning("Could not prefetch next chunk due to memory constraints")
                     self.prefetched_chunk = None
+                    torch.cuda.empty_cache()
                 else:
                     raise
         
         self.current_idx += 1
         return current_chunk
+    
+    def __del__(self):
+        """Clean up any remaining GPU memory."""
+        try:
+            if hasattr(self, 'prefetched_chunk') and self.prefetched_chunk is not None:
+                if hasattr(self.prefetched_chunk, 'device') and self.prefetched_chunk.device.type == 'cuda':
+                    del self.prefetched_chunk
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                self.prefetched_chunk = None
+        except:
+            # Ignore cleanup errors
+            pass
     
     def __len__(self):
         """Return number of chunks."""
