@@ -226,6 +226,11 @@ import accelera.interceptor
 
 def run_command(command):
     """Run a Python command with Accelera."""
+    # Add current working directory to Python path (like normal python behavior)
+    current_dir = os.getcwd()
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    
     full_command = inject_accelera_import() + command
     exec(full_command)
 
@@ -245,16 +250,46 @@ def run_script(script_path, script_args):
         print(f"Error: Script '{script_path}' not found", file=sys.stderr)
         return 1
     
+    # Get absolute path and directory
+    script_path = os.path.abspath(script_path)
+    script_dir = os.path.dirname(script_path)
+    
+    # Add current working directory to Python path (like normal python behavior)
+    current_dir = os.getcwd()
+    if current_dir not in sys.path:
+        sys.path.insert(0, current_dir)
+    
+    # Add script directory to Python path
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    
     # Set up sys.argv for the script
     sys.argv = [script_path] + script_args
     
     # Inject Accelera
     exec(inject_accelera_import())
     
-    # Execute the script
-    with open(script_path, 'rb') as f:
-        code = compile(f.read(), script_path, 'exec')
-        exec(code, {'__name__': '__main__', '__file__': script_path})
+    # Execute the script in the script's directory context
+    old_cwd = os.getcwd()
+    try:
+        # Change to script directory to match normal python behavior
+        os.chdir(script_dir)
+        
+        # Execute the script
+        with open(script_path, 'rb') as f:
+            code = compile(f.read(), script_path, 'exec')
+            
+            # Create proper globals that match normal Python execution
+            script_globals = {
+                '__name__': '__main__',
+                '__file__': script_path,
+                '__builtins__': __builtins__,
+            }
+            
+            exec(code, script_globals)
+    finally:
+        # Restore original working directory
+        os.chdir(old_cwd)
 
 def run_python_with_args(args):
     """Run Python with arbitrary arguments, injecting Accelera."""
