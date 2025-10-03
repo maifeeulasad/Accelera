@@ -1,0 +1,288 @@
+#!/usr/bin/env python3
+"""
+Accelera Python Wrapper
+
+A drop-in replacement for python that automatically enables Accelera
+for PyTorch operations.
+
+Usage:
+    accelera-python your_script.py
+    accelera-python -c "import torch; print(torch.__version__)"
+    accelera-python -m pip install package
+"""
+
+import sys
+import os
+import argparse
+import subprocess
+from pathlib import Path
+
+# Add the accelera package to Python path
+ACCELERA_ROOT = Path(__file__).parent.parent
+sys.path.insert(0, str(ACCELERA_ROOT))
+
+def setup_accelera_environment():
+    """Setup environment variables for Accelera."""
+    # Auto-patch PyTorch when imported
+    os.environ['ACCELERA_AUTO_PATCH'] = 'true'
+    
+    # Default configuration (can be overridden)
+    if 'ACCELERA_MIN_SIZE' not in os.environ:
+        os.environ['ACCELERA_MIN_SIZE'] = '1000'
+    
+    if 'ACCELERA_MEMORY_THRESHOLD_GB' not in os.environ:
+        os.environ['ACCELERA_MEMORY_THRESHOLD_GB'] = '0.5'
+    
+    if 'ACCELERA_VERBOSE' not in os.environ:
+        os.environ['ACCELERA_VERBOSE'] = 'false'
+
+def inject_accelera_import():
+    """Inject Accelera import at the beginning of execution."""
+    import_code = """
+import warnings
+warnings.filterwarnings('ignore', message='.*develop command is deprecated.*')
+
+# Initialize Accelera PyTorch interception
+import accelera.interceptor
+accelera.interceptor.patch_torch()
+
+# Show status if verbose
+import os
+if os.getenv('ACCELERA_VERBOSE', 'false').lower() == 'true':
+    print("🚀 Accelera enabled for PyTorch operations")
+    accelera.interceptor.status()
+    print()
+"""
+    return import_code
+
+def main():
+    """Main wrapper function."""
+    parser = argparse.ArgumentParser(
+        description='Accelera Python Wrapper - PyTorch with automatic memory management',
+        add_help=False  # We'll handle help ourselves
+    )
+    
+    # Accelera-specific options
+    parser.add_argument('--accelera-help', action='store_true',
+                       help='Show Accelera-specific help')
+    parser.add_argument('--accelera-status', action='store_true',
+                       help='Show Accelera status and exit')
+    parser.add_argument('--accelera-verbose', action='store_true',
+                       help='Enable verbose Accelera logging')
+    parser.add_argument('--accelera-disable', action='store_true',
+                       help='Disable Accelera interception')
+    parser.add_argument('--accelera-min-size', type=int, default=1000,
+                       help='Minimum tensor size to intercept (default: 1000)')
+    parser.add_argument('--accelera-memory-threshold', type=float, default=0.5,
+                       help='Memory threshold in GB (default: 0.5)')
+    parser.add_argument('--accelera-fallback-strategy', type=str, default='cpu',
+                       choices=['cpu', 'default_chunk'],
+                       help='Fallback strategy for low memory: cpu or default_chunk (default: cpu)')
+    
+    # Parse known args to handle Accelera options
+    known_args, remaining_args = parser.parse_known_args()
+    
+    if known_args.accelera_help:
+        print_accelera_help()
+        return 0
+    
+    # Setup environment
+    setup_accelera_environment()
+    
+    # Apply Accelera-specific settings
+    if known_args.accelera_verbose:
+        os.environ['ACCELERA_VERBOSE'] = 'true'
+    
+    if known_args.accelera_disable:
+        os.environ['ACCELERA_AUTO_PATCH'] = 'false'
+    
+    os.environ['ACCELERA_MIN_SIZE'] = str(known_args.accelera_min_size)
+    os.environ['ACCELERA_MEMORY_THRESHOLD_GB'] = str(known_args.accelera_memory_threshold)
+    os.environ['ACCELERA_FALLBACK_STRATEGY'] = known_args.accelera_fallback_strategy
+    
+    if known_args.accelera_status:
+        # Just show status
+        exec(inject_accelera_import())
+        return 0
+    
+    # Handle different execution modes
+    if not remaining_args:
+        # Interactive mode
+        run_interactive()
+    elif remaining_args[0] == '-c':
+        # Command mode: python -c "code"
+        if len(remaining_args) < 2:
+            print("Error: -c requires a command", file=sys.stderr)
+            return 1
+        run_command(remaining_args[1])
+    elif remaining_args[0] == '-m':
+        # Module mode: python -m module
+        if len(remaining_args) < 2:
+            print("Error: -m requires a module name", file=sys.stderr)
+            return 1
+        run_module(remaining_args[1], remaining_args[2:])
+    elif remaining_args[0].startswith('-'):
+        # Other Python flags - pass through
+        run_python_with_args(remaining_args)
+    else:
+        # Script mode: python script.py
+        script_path = remaining_args[0]
+        script_args = remaining_args[1:]
+        run_script(script_path, script_args)
+    
+    return 0
+
+def print_accelera_help():
+    """Print Accelera-specific help."""
+    help_text = """
+🚀 Accelera Python Wrapper
+
+A drop-in replacement for python that automatically enables memory-efficient
+matrix operations for PyTorch.
+
+Usage:
+    accelera-python script.py              # Run script with Accelera
+    accelera-python -c "import torch; ..." # Execute command with Accelera
+    accelera-python -m module args         # Run module with Accelera
+    accelera-python                        # Interactive mode with Accelera
+
+Accelera Options:
+    --accelera-help                        Show this help
+    --accelera-status                      Show Accelera status and exit
+    --accelera-verbose                     Enable verbose logging
+    --accelera-disable                     Disable Accelera interception
+    --accelera-min-size SIZE               Min tensor size to intercept (default: 1000)
+    --accelera-memory-threshold GB         Memory threshold in GB (default: 0.5)
+
+Environment Variables:
+    ACCELERA_AUTO_PATCH=true/false        Auto-patch PyTorch (default: true)
+    ACCELERA_VERBOSE=true/false           Verbose logging (default: false)
+    ACCELERA_MIN_SIZE=number              Minimum tensor size
+    ACCELERA_MEMORY_THRESHOLD_GB=number   Memory threshold in GB
+
+Examples:
+    # Run existing PyTorch script with automatic memory management
+    accelera-python train_model.py
+    
+    # Run with verbose logging to see what's being accelerated
+    accelera-python --accelera-verbose train_model.py
+    
+    # Run with custom thresholds
+    accelera-python --accelera-min-size 500 --accelera-memory-threshold 1.0 script.py
+    
+    # Check status
+    accelera-python --accelera-status
+
+What Accelera Does:
+    ✅ Automatically intercepts large PyTorch operations
+    ✅ Uses intelligent chunking to prevent OOM errors
+    ✅ CPU fallback for very low memory thresholds
+    ✅ Default chunking strategy option
+    ✅ Transparent - no code changes needed
+    ✅ Maintains mathematical correctness
+    ✅ Falls back to PyTorch for small operations
+
+Memory Management Strategies:
+    --accelera-fallback-strategy cpu          Use CPU computation for very low thresholds (default)
+    --accelera-fallback-strategy default_chunk  Use simple chunking instead of memory-based chunking
+
+Intercepted Operations:
+    - torch.matmul() and tensor.matmul()
+    - torch.mm() and tensor.mm()
+    - torch.bmm() and tensor.bmm()
+    - torch.add() and tensor.add()
+    - torch.mul() and tensor.mul()
+"""
+    print(help_text)
+
+def run_interactive():
+    """Run Python in interactive mode with Accelera."""
+    print("🚀 Accelera Python Interactive Mode")
+    print("PyTorch operations will automatically use memory-efficient chunking.")
+    print("Type 'accelera.interceptor.status()' to check status.")
+    print()
+    
+    # Inject Accelera and start interactive Python
+    startup_code = inject_accelera_import() + """
+import accelera.interceptor
+"""
+    
+    # Create a temporary startup file
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(startup_code)
+        startup_file = f.name
+    
+    try:
+        # Set PYTHONSTARTUP to our startup file
+        env = os.environ.copy()
+        env['PYTHONSTARTUP'] = startup_file
+        
+        # Run interactive Python
+        subprocess.run([sys.executable, '-i'], env=env)
+    finally:
+        # Clean up
+        os.unlink(startup_file)
+
+def run_command(command):
+    """Run a Python command with Accelera."""
+    full_command = inject_accelera_import() + command
+    exec(full_command)
+
+def run_module(module_name, module_args):
+    """Run a Python module with Accelera."""
+    # Inject Accelera first
+    exec(inject_accelera_import())
+    
+    # Then run the module
+    sys.argv = [f'-m {module_name}'] + module_args
+    import runpy
+    runpy.run_module(module_name, run_name='__main__', alter_sys=True)
+
+def run_script(script_path, script_args):
+    """Run a Python script with Accelera."""
+    if not os.path.exists(script_path):
+        print(f"Error: Script '{script_path}' not found", file=sys.stderr)
+        return 1
+    
+    # Set up sys.argv for the script
+    sys.argv = [script_path] + script_args
+    
+    # Inject Accelera
+    exec(inject_accelera_import())
+    
+    # Execute the script
+    with open(script_path, 'rb') as f:
+        code = compile(f.read(), script_path, 'exec')
+        exec(code, {'__name__': '__main__', '__file__': script_path})
+
+def run_python_with_args(args):
+    """Run Python with arbitrary arguments, injecting Accelera."""
+    # For complex args, use subprocess to maintain compatibility
+    env = os.environ.copy()
+    env['PYTHONSTARTUP'] = create_startup_file()
+    
+    try:
+        result = subprocess.run([sys.executable] + args, env=env)
+        return result.returncode
+    finally:
+        if 'PYTHONSTARTUP' in env and os.path.exists(env['PYTHONSTARTUP']):
+            os.unlink(env['PYTHONSTARTUP'])
+
+def create_startup_file():
+    """Create a temporary startup file with Accelera initialization."""
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+        f.write(inject_accelera_import())
+        return f.name
+
+if __name__ == '__main__':
+    try:
+        exit_code = main()
+        sys.exit(exit_code)
+    except KeyboardInterrupt:
+        print("\nInterrupted by user")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
