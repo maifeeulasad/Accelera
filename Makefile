@@ -1,10 +1,11 @@
 # Makefile for Accelera development
 
-.PHONY: help install test benchmark examples clean lint docs
+.PHONY: help install bin-install test benchmark examples clean lint docs
 
 help:
 	@echo "Accelera Development Commands:"
-	@echo "  install     - Install package in development mode"
+	@echo "  install     - Install package dependencies (pip install)"
+	@echo "  bin-install - Install accelera-python binary wrapper"
 	@echo "  test        - Run unit tests"
 	@echo "  benchmark   - Run performance benchmarks"
 	@echo "  examples    - Run example scripts"
@@ -15,6 +16,38 @@ help:
 install:
 	pip install -r requirements.txt
 	pip install -e .
+
+bin-install:
+	@echo "🚀 Accelera Binary Installation"
+	@echo "==============================="
+	@echo "Installing Accelera transparent PyTorch wrapper..."
+	@echo
+	@command -v python3 >/dev/null 2>&1 || (echo "❌ Error: python3 is required but not found" && exit 1)
+	@python3 -c "import torch" >/dev/null 2>&1 || (echo "❌ Error: PyTorch is required but not found" && echo "Please install PyTorch first: pip install torch" && exit 1)
+	@echo "✅ Python 3 found: $$(python3 --version)"
+	@echo "✅ PyTorch found: $$(python3 -c 'import torch; print(f"PyTorch {torch.__version__}")')"
+	@chmod +x bin/accelera-python
+	@echo "Creating symlink in $$HOME/.local/bin..."
+	@mkdir -p $$HOME/.local/bin
+	@rm -f $$HOME/.local/bin/accelera-python
+	@ln -s $$(pwd)/bin/accelera-python $$HOME/.local/bin/accelera-python
+	@echo "✅ Created symlink: $$HOME/.local/bin/accelera-python -> $$(pwd)/bin/accelera-python"
+	@if [ "$$PATH" != "*$$HOME/.local/bin*" ]; then \
+		echo "⚠️  $$HOME/.local/bin is not in your PATH"; \
+		echo "   Add this line to your ~/.bashrc or ~/.zshrc:"; \
+		echo "   export PATH=\"$$HOME/.local/bin:$$PATH\""; \
+	fi
+	@echo
+	@echo "🎉 Binary installation complete!"
+	@echo
+	@echo "Usage examples:"
+	@echo "  accelera-python --accelera-help          # Show help"
+	@echo "  accelera-python --accelera-status        # Check status"
+	@echo "  accelera-python your_script.py           # Run script with Accelera"
+	@echo "  accelera-python --accelera-verbose train.py  # Run with verbose logging"
+	@echo
+	@echo "Test the installation:"
+	@echo "  accelera-python -c \"import torch; print('✅ Accelera ready!')\""
 
 test:
 	python -m pytest tests/ -v
