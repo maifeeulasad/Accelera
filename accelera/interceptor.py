@@ -23,8 +23,8 @@ class AcceleraConfig:
     
     def __init__(self):
         self.enabled = True
-        self.min_size_threshold = int(os.getenv('ACCELERA_MIN_SIZE', '1000'))  # Min dimension to intercept
-        self.memory_threshold_gb = float(os.getenv('ACCELERA_MEMORY_THRESHOLD_GB', '1.0'))  # Min memory to intercept
+        self.min_size_threshold = int(os.getenv('ACCELERA_MIN_SIZE', '2048'))  # Higher threshold for safety
+        self.memory_threshold_gb = float(os.getenv('ACCELERA_MEMORY_THRESHOLD_GB', '1.0'))  # Higher memory threshold
         self.engine = None
         self.verbose = os.getenv('ACCELERA_VERBOSE', 'false').lower() == 'true'
     
@@ -70,7 +70,14 @@ def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> b
         if not isinstance(tensor, torch.Tensor):
             return False
         
-        # Check dimension threshold
+        # Don't intercept if tensor has unusual dimensions (could break shape expectations)
+        if len(tensor.shape) < 2:  # Skip 1D tensors
+            return False
+            
+        if len(tensor.shape) > 4:  # Skip tensors with more than 4 dimensions for safety
+            return False
+        
+        # Check dimension threshold - be more conservative
         max_dim = max(tensor.shape) if tensor.shape else 0
         if max_dim < _config.min_size_threshold:
             return False
@@ -79,7 +86,23 @@ def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> b
         memory_gb = tensor.numel() * tensor.element_size() / 1e9
         return memory_gb >= _config.memory_threshold_gb
     
-    return is_large_enough(tensor_a) or is_large_enough(tensor_b)
+    # Only intercept if at least one tensor is large enough and compatible
+    tensor_a_large = is_large_enough(tensor_a)
+    tensor_b_large = is_large_enough(tensor_b)
+    
+    # Additional safety check: if we have a 4D tensor (likely from FLUX model), be extra careful
+    if isinstance(tensor_a, torch.Tensor) and len(tensor_a.shape) == 4:
+        # For 4D tensors, only intercept if they're really large to avoid breaking model expectations
+        min_4d_size = max(_config.min_size_threshold * 4, 2048)  # Higher threshold for 4D tensors
+        if max(tensor_a.shape) < min_4d_size:
+            return False
+    
+    if isinstance(tensor_b, torch.Tensor) and len(tensor_b.shape) == 4:
+        min_4d_size = max(_config.min_size_threshold * 4, 2048)
+        if max(tensor_b.shape) < min_4d_size:
+            return False
+    
+    return tensor_a_large or tensor_b_large
 
 
 def log_interception(operation: str, shapes: tuple, use_accelera: bool):
@@ -102,23 +125,46 @@ def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[t
     if isinstance(input, torch.Tensor) and isinstance(other, torch.Tensor) and should_intercept(input, other):
         log_interception("matmul", (input, other), True)
         
-        engine = _config.get_engine()
+        # Store original shape and device info for debugging
+        original_input_shape = input.shape
+        original_other_shape = other.shape
+        original_device = input.device
+        original_dtype = input.dtype
         
-        # Convert to Accelera matrices
-        A = Matrix(input)
-        B = Matrix(other)
-        
-        # Perform operation
-        result = engine.matmul(A, B)
-        
-        # Convert back to tensor on original device
-        result_tensor = result.tensor().to(input.device)
-        
-        if out is not None:
-            out.copy_(result_tensor)
-            return out
-        
-        return result_tensor
+        try:
+            engine = _config.get_engine()
+            
+            # Convert to Accelera matrices
+            A = Matrix(input)
+            B = Matrix(other)
+            
+            # Perform operation
+            result = engine.matmul(A, B)
+            
+            # Convert back to tensor on original device and dtype
+            result_tensor = result.tensor().to(device=original_device, dtype=original_dtype)
+            
+            # Verify the result shape is what we expect for matrix multiplication
+            expected_shape = original_input_shape[:-1] + original_other_shape[-1:]
+            if result_tensor.shape != expected_shape:
+                logger.warning(f"[ACCELERA] Shape mismatch detected! Expected {expected_shape}, got {result_tensor.shape}")
+                logger.warning(f"[ACCELERA] Falling back to original PyTorch for safety")
+                return torch._original_matmul(input, other, out=out)
+            
+            # Debug: Check if shape is preserved correctly
+            if _config.verbose:
+                logger.info(f"[ACCELERA] matmul shapes: {original_input_shape} @ {original_other_shape} -> {result_tensor.shape}")
+            
+            if out is not None:
+                out.copy_(result_tensor)
+                return out
+            
+            return result_tensor
+            
+        except Exception as e:
+            # If anything goes wrong with Accelera, fall back to original PyTorch
+            logger.warning(f"[ACCELERA] Error in matmul, falling back to PyTorch: {e}")
+            return torch._original_matmul(input, other, out=out)
     else:
         log_interception("matmul", (input, other), False)
         return torch._original_matmul(input, other, out=out)
@@ -173,18 +219,33 @@ def accelera_add(input: torch.Tensor, other: torch.Tensor, *, alpha: float = 1, 
     if isinstance(input, torch.Tensor) and isinstance(other, torch.Tensor) and should_intercept(input, other):
         log_interception("add", (input, other), True)
         
-        engine = _config.get_engine()
-        A = Matrix(input)
-        B = Matrix(other)
-        
-        result = engine.add(A, B)
-        result_tensor = result.tensor().to(input.device)
-        
-        if out is not None:
-            out.copy_(result_tensor)
-            return out
-        
-        return result_tensor
+        try:
+            # Store original properties
+            original_device = input.device
+            original_dtype = input.dtype
+            original_shape = input.shape
+            
+            engine = _config.get_engine()
+            A = Matrix(input)
+            B = Matrix(other)
+            
+            result = engine.add(A, B)
+            result_tensor = result.tensor().to(device=original_device, dtype=original_dtype)
+            
+            # Verify shape preservation
+            if result_tensor.shape != original_shape:
+                logger.warning(f"[ACCELERA] Add shape mismatch! Expected {original_shape}, got {result_tensor.shape}")
+                return torch._original_add(input, other, alpha=alpha, out=out)
+            
+            if out is not None:
+                out.copy_(result_tensor)
+                return out
+            
+            return result_tensor
+            
+        except Exception as e:
+            logger.warning(f"[ACCELERA] Error in add, falling back to PyTorch: {e}")
+            return torch._original_add(input, other, alpha=alpha, out=out)
     else:
         log_interception("add", (input, other), False)
         return torch._original_add(input, other, alpha=alpha, out=out)
@@ -195,18 +256,33 @@ def accelera_mul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[torc
     if isinstance(input, torch.Tensor) and isinstance(other, torch.Tensor) and should_intercept(input, other):
         log_interception("mul", (input, other), True)
         
-        engine = _config.get_engine()
-        A = Matrix(input)
-        B = Matrix(other)
-        
-        result = engine.multiply(A, B)
-        result_tensor = result.tensor().to(input.device)
-        
-        if out is not None:
-            out.copy_(result_tensor)
-            return out
-        
-        return result_tensor
+        try:
+            # Store original properties
+            original_device = input.device
+            original_dtype = input.dtype
+            original_shape = input.shape
+            
+            engine = _config.get_engine()
+            A = Matrix(input)
+            B = Matrix(other)
+            
+            result = engine.multiply(A, B)
+            result_tensor = result.tensor().to(device=original_device, dtype=original_dtype)
+            
+            # Verify shape preservation
+            if result_tensor.shape != original_shape:
+                logger.warning(f"[ACCELERA] Mul shape mismatch! Expected {original_shape}, got {result_tensor.shape}")
+                return torch._original_mul(input, other, out=out)
+            
+            if out is not None:
+                out.copy_(result_tensor)
+                return out
+            
+            return result_tensor
+            
+        except Exception as e:
+            logger.warning(f"[ACCELERA] Error in mul, falling back to PyTorch: {e}")
+            return torch._original_mul(input, other, out=out)
     else:
         log_interception("mul", (input, other), False)
         return torch._original_mul(input, other, out=out)
