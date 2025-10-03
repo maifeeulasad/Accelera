@@ -102,12 +102,19 @@ class Matrix:
     
     def to_cpu(self) -> 'Matrix':
         """
-        Move matrix to CPU storage.
+        Move matrix to CPU storage and clean up GPU memory.
         
         Returns:
             Self for method chaining
         """
-        self._tensor = self._tensor.to(self._storage_device)
+        if self._tensor.device != self._storage_device:
+            # Move to CPU
+            cpu_tensor = self._tensor.cpu()
+            # Delete GPU reference
+            del self._tensor
+            # Force GPU cleanup
+            torch.cuda.empty_cache()
+            self._tensor = cpu_tensor
         self._gpu_device = None
         return self
     
@@ -120,6 +127,25 @@ class Matrix:
         if self._tensor.device != torch.device('cpu'):
             return self._tensor.cpu().numpy()
         return self._tensor.numpy()
+    
+    def cleanup_gpu(self):
+        """Explicitly clean up any GPU memory held by this matrix."""
+        if self._tensor.device.type == 'cuda':
+            # Move to CPU and clean up GPU memory
+            cpu_tensor = self._tensor.cpu()
+            del self._tensor
+            torch.cuda.empty_cache()
+            self._tensor = cpu_tensor
+            self._gpu_device = None
+    
+    def __del__(self):
+        """Destructor to ensure GPU memory is cleaned up."""
+        try:
+            if hasattr(self, '_tensor') and self._tensor.device.type == 'cuda':
+                self.cleanup_gpu()
+        except:
+            # Ignore errors during cleanup
+            pass
     
     def clone(self) -> 'Matrix':
         """Create a deep copy of the matrix."""
