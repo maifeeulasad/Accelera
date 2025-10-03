@@ -9,9 +9,12 @@ import os
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-# Read requirements
-with open("requirements.txt", "r", encoding="utf-8") as fh:
-    requirements = [line.strip() for line in fh if line.strip() and not line.startswith("#")]
+requirements = [
+    "psutil>=5.8.0",
+    "tqdm>=4.64.0",
+    # "torch>=2.0.0",    # more like peer dependency
+    # "numpy>=1.21.0",   # more like peer dependency
+]
 
 setup(
     name="accelera",
