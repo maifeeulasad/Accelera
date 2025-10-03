@@ -65,6 +65,10 @@ def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> b
     def is_large_enough(tensor):
         if tensor is None:
             return False
+            
+        # Only intercept actual tensors, not scalars
+        if not isinstance(tensor, torch.Tensor):
+            return False
         
         # Check dimension threshold
         max_dim = max(tensor.shape) if tensor.shape else 0
@@ -82,13 +86,21 @@ def log_interception(operation: str, shapes: tuple, use_accelera: bool):
     """Log operation interception for debugging."""
     if _config.verbose:
         status = "ACCELERA" if use_accelera else "PYTORCH"
-        logger.info(f"[{status}] {operation} with shapes {shapes}")
+        # Handle cases where arguments might not be tensors
+        formatted_shapes = []
+        for shape in shapes:
+            if hasattr(shape, 'shape'):
+                formatted_shapes.append(shape.shape)
+            else:
+                formatted_shapes.append(f"scalar({type(shape).__name__})")
+        logger.info(f"[{status}] {operation} with shapes {tuple(formatted_shapes)}")
 
 
 def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Accelera-powered matrix multiplication."""
-    if should_intercept(input, other):
-        log_interception("matmul", (input.shape, other.shape), True)
+    # Only intercept if both arguments are tensors
+    if isinstance(input, torch.Tensor) and isinstance(other, torch.Tensor) and should_intercept(input, other):
+        log_interception("matmul", (input, other), True)
         
         engine = _config.get_engine()
         
@@ -108,24 +120,24 @@ def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[t
         
         return result_tensor
     else:
-        log_interception("matmul", (input.shape, other.shape), False)
+        log_interception("matmul", (input, other), False)
         return torch._original_matmul(input, other, out=out)
 
 
 def accelera_mm(input: torch.Tensor, mat2: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Accelera-powered mm (matrix multiplication)."""
-    if should_intercept(input, mat2):
-        log_interception("mm", (input.shape, mat2.shape), True)
+    if isinstance(input, torch.Tensor) and isinstance(mat2, torch.Tensor) and should_intercept(input, mat2):
+        log_interception("mm", (input, mat2), True)
         return accelera_matmul(input, mat2, out=out)
     else:
-        log_interception("mm", (input.shape, mat2.shape), False)
+        log_interception("mm", (input, mat2), False)
         return torch._original_mm(input, mat2, out=out)
 
 
 def accelera_bmm(input: torch.Tensor, mat2: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Accelera-powered batch matrix multiplication."""
-    if should_intercept(input, mat2):
-        log_interception("bmm", (input.shape, mat2.shape), True)
+    if isinstance(input, torch.Tensor) and isinstance(mat2, torch.Tensor) and should_intercept(input, mat2):
+        log_interception("bmm", (input, mat2), True)
         
         # Handle batch dimension
         batch_size = input.shape[0]
@@ -147,7 +159,8 @@ def accelera_bmm(input: torch.Tensor, mat2: torch.Tensor, *, out: Optional[torch
         
         return result_tensor
     else:
-        log_interception("bmm", (input.shape, mat2.shape), False)
+        log_interception("bmm", (input, mat2), False)
+        return torch._original_bmm(input, mat2, out=out)
         return torch._original_bmm(input, mat2, out=out)
 
 
@@ -157,8 +170,8 @@ def accelera_add(input: torch.Tensor, other: torch.Tensor, *, alpha: float = 1, 
         # Handle alpha scaling with original PyTorch
         return torch._original_add(input, other, alpha=alpha, out=out)
     
-    if should_intercept(input, other):
-        log_interception("add", (input.shape, other.shape), True)
+    if isinstance(input, torch.Tensor) and isinstance(other, torch.Tensor) and should_intercept(input, other):
+        log_interception("add", (input, other), True)
         
         engine = _config.get_engine()
         A = Matrix(input)
@@ -173,14 +186,14 @@ def accelera_add(input: torch.Tensor, other: torch.Tensor, *, alpha: float = 1, 
         
         return result_tensor
     else:
-        log_interception("add", (input.shape, other.shape), False)
+        log_interception("add", (input, other), False)
         return torch._original_add(input, other, alpha=alpha, out=out)
 
 
 def accelera_mul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Accelera-powered element-wise multiplication."""
-    if should_intercept(input, other):
-        log_interception("mul", (input.shape, other.shape), True)
+    if isinstance(input, torch.Tensor) and isinstance(other, torch.Tensor) and should_intercept(input, other):
+        log_interception("mul", (input, other), True)
         
         engine = _config.get_engine()
         A = Matrix(input)
@@ -195,7 +208,7 @@ def accelera_mul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[torc
         
         return result_tensor
     else:
-        log_interception("mul", (input.shape, other.shape), False)
+        log_interception("mul", (input, other), False)
         return torch._original_mul(input, other, out=out)
 
 
