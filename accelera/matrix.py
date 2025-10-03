@@ -214,7 +214,11 @@ class Matrix:
         if not isinstance(other, Matrix):
             raise TypeError("Matrix multiplication requires another Matrix")
         
-        result = torch.matmul(self._tensor, other._tensor)
+        # Use ORIGINAL PyTorch function to avoid recursion if interceptors are active
+        if hasattr(torch, '_original_matmul'):
+            result = torch._original_matmul(self._tensor, other._tensor)
+        else:
+            result = torch.matmul(self._tensor, other._tensor)
         return Matrix(result, device=str(self._storage_device), dtype=self.dtype)
     
     def transpose(self, dim0: int = -2, dim1: int = -1) -> 'Matrix':
