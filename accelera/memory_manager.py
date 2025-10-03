@@ -105,7 +105,23 @@ class MemoryManager:
             raise RuntimeError(f"Cannot allocate {size_bytes / 1e9:.2f} GB on GPU. "
                              f"Available: {self.get_available_memory() / 1e9:.2f} GB")
         
-        return tensor.to(self.device)
+        try:
+            # Create GPU tensor and immediately clean up CPU reference if possible
+            gpu_tensor = tensor.to(self.device)
+            return gpu_tensor
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                # Force cleanup and retry once
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                try:
+                    gpu_tensor = tensor.to(self.device)
+                    return gpu_tensor
+                except RuntimeError:
+                    # Still failed - propagate the OOM error
+                    raise
+            else:
+                raise
     
     def move_to_cpu(self, tensor: torch.Tensor) -> torch.Tensor:
         """Move tensor to CPU and free GPU memory."""
@@ -116,9 +132,30 @@ class MemoryManager:
         return cpu_tensor
     
     def cleanup(self):
-        """Force cleanup of GPU memory."""
+        """Force aggressive cleanup of GPU memory."""
+        # Force Python garbage collection
         gc.collect()
+        
+        # Clear PyTorch GPU cache
         torch.cuda.empty_cache()
+        
+        # Force GPU synchronization to ensure operations complete
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        
+        # Check for severe memory pressure (but avoid recursion)
+        try:
+            available_memory = torch.cuda.get_device_properties(self.device).total_memory - torch.cuda.memory_allocated(self.device)
+            if available_memory < self.total_gpu_memory * 0.1:  # Less than 10% available
+                logger.warning("Severe memory pressure detected, performing aggressive cleanup")
+                # Multiple rounds of cache clearing (avoid calling get_available_memory again)
+                for _ in range(3):
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+        except RuntimeError:
+            # If we can't check memory, just do basic cleanup
+            pass
         
     def get_optimal_chunk_size(self, matrix_shape: tuple, operation: str = 'matmul') -> int:
         """
