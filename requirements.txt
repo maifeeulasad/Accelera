@@ -1,4 +1,0 @@
-# torch>=2.0.0    # more like peer dependency
-# numpy>=1.21.0   # more like peer dependency
-psutil>=5.8.0
-tqdm>=4.64.0
