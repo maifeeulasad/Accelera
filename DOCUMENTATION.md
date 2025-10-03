@@ -44,8 +44,9 @@ Accelera is a memory-efficient matrix operations framework designed to handle la
 ```bash
 git clone https://github.com/maifeeulasad/accelera
 cd accelera
-pip install -r requirements.txt
-pip install -e .
+python3 -m build --no-isolation
+make install       # to install as library only
+make install-bin   # to install the executable like system
 ```
 
 ### Verify Installation
