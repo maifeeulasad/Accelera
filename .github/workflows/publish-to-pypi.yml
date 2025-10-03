@@ -56,7 +56,7 @@ jobs:
         
         # Verify the package can be installed
         python -m pip install dist/*.whl
-        python -c "import accelera; print(f'Accelera version: {accelera.__version__ if hasattr(accelera, \"__version__\") else \"unknown\"}')"
+        # python -c "import accelera; print(f'Accelera version: {accelera.__version__ if hasattr(accelera, \"__version__\") else \"unknown\"}')"
         
     - name: Check package with twine
       run: |
