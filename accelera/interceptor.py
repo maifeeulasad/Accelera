@@ -23,8 +23,8 @@ class AcceleraConfig:
     
     def __init__(self):
         self.enabled = True
-        self.min_size_threshold = int(os.getenv('ACCELERA_MIN_SIZE', '2048'))  # Higher threshold for safety
-        self.memory_threshold_gb = float(os.getenv('ACCELERA_MEMORY_THRESHOLD_GB', '1.0'))  # Higher memory threshold
+        self.min_size_threshold = int(os.getenv('ACCELERA_MIN_SIZE', '4096'))  # Only intercept very large operations
+        self.memory_threshold_gb = float(os.getenv('ACCELERA_MEMORY_THRESHOLD_GB', '8.0'))  # Much higher - only chunk truly huge ops
         self.engine = None
         self.verbose = os.getenv('ACCELERA_VERBOSE', 'false').lower() == 'true'
     
@@ -35,10 +35,13 @@ class AcceleraConfig:
             fallback_strategy = os.getenv('ACCELERA_FALLBACK_STRATEGY', 'cpu')
             
             # Create memory-efficient engine with configuration from environment/CLI
+            # Use GPU-first storage to avoid RAM exhaustion
             self.engine = MemoryEfficientEngine(
                 enable_progress=False,  # Disable progress for transparent operation
                 memory_threshold_gb=self.memory_threshold_gb,  # Pass the threshold
-                fallback_strategy=fallback_strategy  # Pass fallback strategy
+                fallback_strategy=fallback_strategy,  # Pass fallback strategy
+                prefer_gpu_storage=True,  # Keep results on GPU when possible
+                use_hybrid_matmul=True  # Use hybrid tiled approach
             )
         return self.engine
 

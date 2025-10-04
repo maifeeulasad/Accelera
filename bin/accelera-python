@@ -26,12 +26,13 @@ def setup_accelera_environment():
     # Auto-patch PyTorch when imported
     os.environ['ACCELERA_AUTO_PATCH'] = 'true'
     
-    # Default configuration (can be overridden)
+    # Default configuration (can be overridden by user's environment)
+    # Optimized for modern GPUs (8-16GB VRAM)
     if 'ACCELERA_MIN_SIZE' not in os.environ:
-        os.environ['ACCELERA_MIN_SIZE'] = '1000'
+        os.environ['ACCELERA_MIN_SIZE'] = '4096'  # Only intercept large operations
     
     if 'ACCELERA_MEMORY_THRESHOLD_GB' not in os.environ:
-        os.environ['ACCELERA_MEMORY_THRESHOLD_GB'] = '0.5'
+        os.environ['ACCELERA_MEMORY_THRESHOLD_GB'] = '8.0'  # Let GPU handle most operations
     
     if 'ACCELERA_VERBOSE' not in os.environ:
         os.environ['ACCELERA_VERBOSE'] = 'false'

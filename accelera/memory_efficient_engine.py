@@ -147,14 +147,16 @@ class MemoryEfficientEngine(MatrixEngine):
                    f"Result={result_memory_gb:.3f}GB, Total={total_memory_gb:.3f}GB")
         
         # Decision tree for choosing computation strategy
+        # Strategy: Use hybrid for operations that would trigger chunking
         
-        # 1. For extremely large operations, use hybrid tiled matmul
-        if self.use_hybrid_matmul and total_memory_gb > self.memory_threshold_gb * 3:
-            logger.info(f"[MEMORY_EFFICIENT_ENGINE] Using hybrid tiled matmul for very large operation")
+        # 1. If operation exceeds threshold AND hybrid is enabled, use hybrid tiled matmul
+        #    This prevents the inefficient standard chunking
+        if self.use_hybrid_matmul and total_memory_gb >= self.memory_threshold_gb:
+            logger.info(f"[MEMORY_EFFICIENT_ENGINE] Using hybrid tiled matmul (exceeds threshold: {self.memory_threshold_gb:.3f}GB)")
             result_tensor = self.hybrid_engine.matmul_large(a, b)
             return Matrix(result_tensor)
         
-        # 2. For very low thresholds, use fallback strategy
+        # 2. For very low thresholds with small operations, use fallback strategy
         if self._should_use_fallback(total_memory_gb):
             
             if self.fallback_strategy == "hybrid" and self.hybrid_engine:
