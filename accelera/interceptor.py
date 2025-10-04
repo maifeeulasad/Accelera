@@ -90,17 +90,18 @@ def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> b
     tensor_a_large = is_large_enough(tensor_a)
     tensor_b_large = is_large_enough(tensor_b)
     
-    # Additional safety check: if we have a 4D tensor (likely from FLUX model), be extra careful
-    if isinstance(tensor_a, torch.Tensor) and len(tensor_a.shape) == 4:
-        # For 4D tensors, only intercept if they're really large to avoid breaking model expectations
-        min_4d_size = max(_config.min_size_threshold * 4, 2048)  # Higher threshold for 4D tensors
-        if max(tensor_a.shape) < min_4d_size:
-            return False
+    # Additional safety check: DO NOT intercept 4D+ tensors to avoid breaking FLUX and similar models
+    # These models expect exact tensor shapes and our current implementation doesn't preserve
+    # the full dimensional context correctly
+    if isinstance(tensor_a, torch.Tensor) and len(tensor_a.shape) >= 4:
+        if _config.verbose:
+            logger.info(f"[ACCELERA] Skipping 4D+ tensor interception for safety: shape={tensor_a.shape}")
+        return False
     
-    if isinstance(tensor_b, torch.Tensor) and len(tensor_b.shape) == 4:
-        min_4d_size = max(_config.min_size_threshold * 4, 2048)
-        if max(tensor_b.shape) < min_4d_size:
-            return False
+    if isinstance(tensor_b, torch.Tensor) and len(tensor_b.shape) >= 4:
+        if _config.verbose:
+            logger.info(f"[ACCELERA] Skipping 4D+ tensor interception for safety: shape={tensor_b.shape}")
+        return False
     
     return tensor_a_large or tensor_b_large
 
@@ -130,6 +131,14 @@ def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[t
         original_other_shape = other.shape
         original_device = input.device
         original_dtype = input.dtype
+        original_ndim = input.ndim
+        
+        # Additional safety: Don't intercept if dimensions are incompatible with simple matmul
+        # This prevents breaking models with complex tensor shapes
+        if original_ndim > 3 or (isinstance(other, torch.Tensor) and other.ndim > 3):
+            if _config.verbose:
+                logger.info(f"[ACCELERA] Falling back to PyTorch for high-dimensional tensors: {original_input_shape} @ {original_other_shape}")
+            return torch._original_matmul(input, other, out=out)
         
         try:
             engine = _config.get_engine()
@@ -144,10 +153,22 @@ def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[t
             # Convert back to tensor on original device and dtype
             result_tensor = result.tensor().to(device=original_device, dtype=original_dtype)
             
-            # Verify the result shape is what we expect for matrix multiplication
-            expected_shape = original_input_shape[:-1] + original_other_shape[-1:]
+            # Verify the result shape matches PyTorch's matmul behavior
+            # For 2D @ 2D: (m, k) @ (k, n) = (m, n)
+            # For 3D @ 3D: batch matmul
+            # For higher dims: should have fallen back already
+            if original_ndim == 2 and other.ndim == 2:
+                expected_shape = torch.Size([original_input_shape[0], original_other_shape[1]])
+            elif original_ndim == 2 and other.ndim == 1:
+                expected_shape = torch.Size([original_input_shape[0]])
+            else:
+                # For other cases, use PyTorch to compute expected shape
+                expected_shape = torch._original_matmul(input[:1] if input.shape[0] > 0 else input, 
+                                                        other[:1] if other.shape[0] > 0 else other).shape
+            
             if result_tensor.shape != expected_shape:
                 logger.warning(f"[ACCELERA] Shape mismatch detected! Expected {expected_shape}, got {result_tensor.shape}")
+                logger.warning(f"[ACCELERA] Input shapes were: {original_input_shape} @ {original_other_shape}")
                 logger.warning(f"[ACCELERA] Falling back to original PyTorch for safety")
                 return torch._original_matmul(input, other, out=out)
             
