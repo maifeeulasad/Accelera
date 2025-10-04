@@ -76,9 +76,6 @@ def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> b
         # Don't intercept if tensor has unusual dimensions (could break shape expectations)
         if len(tensor.shape) < 2:  # Skip 1D tensors
             return False
-            
-        if len(tensor.shape) > 4:  # Skip tensors with more than 4 dimensions for safety
-            return False
         
         # Check dimension threshold - be more conservative
         max_dim = max(tensor.shape) if tensor.shape else 0
@@ -92,19 +89,6 @@ def should_intercept(tensor_a: torch.Tensor, tensor_b: torch.Tensor = None) -> b
     # Only intercept if at least one tensor is large enough and compatible
     tensor_a_large = is_large_enough(tensor_a)
     tensor_b_large = is_large_enough(tensor_b)
-    
-    # Additional safety check: DO NOT intercept 4D+ tensors to avoid breaking FLUX and similar models
-    # These models expect exact tensor shapes and our current implementation doesn't preserve
-    # the full dimensional context correctly
-    if isinstance(tensor_a, torch.Tensor) and len(tensor_a.shape) >= 4:
-        if _config.verbose:
-            logger.info(f"[ACCELERA] Skipping 4D+ tensor interception for safety: shape={tensor_a.shape}")
-        return False
-    
-    if isinstance(tensor_b, torch.Tensor) and len(tensor_b.shape) >= 4:
-        if _config.verbose:
-            logger.info(f"[ACCELERA] Skipping 4D+ tensor interception for safety: shape={tensor_b.shape}")
-        return False
     
     return tensor_a_large or tensor_b_large
 
@@ -135,13 +119,6 @@ def accelera_matmul(input: torch.Tensor, other: torch.Tensor, *, out: Optional[t
         original_device = input.device
         original_dtype = input.dtype
         original_ndim = input.ndim
-        
-        # Additional safety: Don't intercept if dimensions are incompatible with simple matmul
-        # This prevents breaking models with complex tensor shapes
-        if original_ndim > 3 or (isinstance(other, torch.Tensor) and other.ndim > 3):
-            if _config.verbose:
-                logger.info(f"[ACCELERA] Falling back to PyTorch for high-dimensional tensors: {original_input_shape} @ {original_other_shape}")
-            return torch._original_matmul(input, other, out=out)
         
         try:
             engine = _config.get_engine()
