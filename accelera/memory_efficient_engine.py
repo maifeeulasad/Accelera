@@ -1,8 +1,8 @@
 """
-Memory-Efficient Matrix Engine with CPU Fallback
+Memory-Efficient Matrix Engine with Hybrid CPU-GPU Strategy
 
-This engine provides CPU fallback for very low memory thresholds to prevent
-excessive chunking that causes memory leaks.
+This engine provides hybrid CPU-GPU computation and CPU fallback for very low 
+memory thresholds to prevent excessive chunking that causes memory leaks.
 """
 
 import torch
@@ -12,23 +12,28 @@ import logging
 from typing import Optional, Union
 
 from .engine import MatrixEngine, Matrix
+from .hybrid_matmul import HybridMatMul
 
 logger = logging.getLogger(__name__)
 
 
 class MemoryEfficientEngine(MatrixEngine):
     """
-    Matrix engine with CPU fallback for very low memory thresholds.
+    Matrix engine with hybrid CPU-GPU strategy and intelligent fallback.
     
-    This engine prevents memory leaks by using CPU computation instead of
-    excessive GPU chunking when memory thresholds are very low.
+    This engine prevents memory leaks by using:
+    1. Hybrid tiled matmul for extremely large operations
+    2. CPU fallback for very low memory thresholds
+    3. GPU-first storage to avoid RAM exhaustion
     """
     
     def __init__(self, 
                  memory_threshold_gb: float = 1.0,
                  enable_progress: bool = False,
                  chunk_size: Optional[int] = None,
-                 fallback_strategy: str = "cpu"):
+                 fallback_strategy: str = "cpu",
+                 prefer_gpu_storage: bool = False,
+                 use_hybrid_matmul: bool = True):
         """
         Initialize memory-efficient engine.
         
@@ -36,7 +41,9 @@ class MemoryEfficientEngine(MatrixEngine):
             memory_threshold_gb: Memory threshold for operations  
             enable_progress: Whether to show progress bars
             chunk_size: Optional chunk size override
-            fallback_strategy: Strategy for low memory ('cpu' or 'default_chunk')
+            fallback_strategy: Strategy for low memory ('cpu', 'default_chunk', or 'hybrid')
+            prefer_gpu_storage: Keep results on GPU when possible
+            use_hybrid_matmul: Use hybrid tiled matmul for very large operations
         """
         super().__init__(
             memory_threshold_gb=memory_threshold_gb,
@@ -44,6 +51,18 @@ class MemoryEfficientEngine(MatrixEngine):
             chunk_size=chunk_size
         )
         self.fallback_strategy = fallback_strategy
+        self.prefer_gpu_storage = prefer_gpu_storage
+        self.use_hybrid_matmul = use_hybrid_matmul
+        
+        # Initialize hybrid matmul engine if enabled
+        if self.use_hybrid_matmul:
+            self.hybrid_engine = HybridMatMul(
+                gpu_memory_limit_gb=memory_threshold_gb * 2,  # Give it more headroom
+                enable_progress=enable_progress
+            )
+            logger.info("Hybrid matmul engine initialized")
+        else:
+            self.hybrid_engine = None
         
     def _should_use_fallback(self, total_memory_gb: float) -> bool:
         """
@@ -106,8 +125,8 @@ class MemoryEfficientEngine(MatrixEngine):
         
     def matmul(self, a_matrix: Matrix, b_matrix: Matrix) -> Matrix:
         """
-        Override parent matmul with CPU fallback for very low thresholds.
-        This prevents excessive chunking memory leaks.
+        Override parent matmul with hybrid strategy and intelligent fallback.
+        Chooses best approach based on operation size and memory constraints.
         """
         import torch
         
@@ -117,7 +136,7 @@ class MemoryEfficientEngine(MatrixEngine):
         
         logger.info(f"[MEMORY_EFFICIENT_ENGINE] Computing matrix multiplication: {a.shape} @ {b.shape}")
         
-        # Calculate memory requirements (simplified)
+        # Calculate memory requirements
         bytes_per_element = 4  # float32
         a_memory_gb = (a.numel() * bytes_per_element) / (1024**3)
         b_memory_gb = (b.numel() * bytes_per_element) / (1024**3)
@@ -127,10 +146,23 @@ class MemoryEfficientEngine(MatrixEngine):
         logger.info(f"[MEMORY_EFFICIENT_ENGINE] Memory required: A={a_memory_gb:.3f}GB, B={b_memory_gb:.3f}GB, "
                    f"Result={result_memory_gb:.3f}GB, Total={total_memory_gb:.3f}GB")
         
-        # Check if we should use fallback strategy for very low thresholds
+        # Decision tree for choosing computation strategy
+        
+        # 1. For extremely large operations, use hybrid tiled matmul
+        if self.use_hybrid_matmul and total_memory_gb > self.memory_threshold_gb * 3:
+            logger.info(f"[MEMORY_EFFICIENT_ENGINE] Using hybrid tiled matmul for very large operation")
+            result_tensor = self.hybrid_engine.matmul_large(a, b)
+            return Matrix(result_tensor)
+        
+        # 2. For very low thresholds, use fallback strategy
         if self._should_use_fallback(total_memory_gb):
             
-            if self.fallback_strategy == "cpu":
+            if self.fallback_strategy == "hybrid" and self.hybrid_engine:
+                logger.info(f"[MEMORY_EFFICIENT_ENGINE] Using hybrid matmul fallback")
+                result_tensor = self.hybrid_engine.matmul_large(a, b)
+                return Matrix(result_tensor)
+                
+            elif self.fallback_strategy == "cpu":
                 logger.info(f"[MEMORY_EFFICIENT_ENGINE] Using CPU fallback for very low threshold ({self.memory_threshold_gb:.3f}GB)")
                 
                 # The Matrix class seems to move tensors to CPU by default
